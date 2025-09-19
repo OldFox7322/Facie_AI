@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  #Redis
+  redis:
+    image: redis:6.2.6-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - my_network
+
+  #FastAPI
+  api:
+    build: .
+    container_name: fastapi_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app 
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    networks:
+      - my_network
+
+  #Celery Worker
+  worker:
+    build: .
+    container_name: celery_worker
+    command: celery -A celery_tasks worker --loglevel=info
+    volumes:
+      - .:/app 
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - api
+    networks:
+      - my_network
+
+  #Celery Beat
+  beat:
+    build: .
+    container_name: celery_beat
+    command: celery -A celery_tasks beat --loglevel=info
+    volumes:
+      - .:/app 
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - api
+    networks:
+      - my_network
+
+
+
+  #Trainer
+  trainer:
+    build: .
+    volumes:
+      - .:/app
+    networks:
+      - my_network
+    command: python ml_trainer.py
+
+
+
+  #Tests
+  tests:
+    build: .
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - api
+    networks:
+      - my_network
+    command: >
+      /bin/sh -c "sleep 5 && pytest test_main.py"
+
+
+networks:
+  my_network:
+    driver: bridge

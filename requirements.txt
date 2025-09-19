@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+requests
+celery
+redis
+pytest
+pytest-dependency
+pandas
+scikit-learn
+joblib
+httpx
