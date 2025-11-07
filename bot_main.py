@@ -386,8 +386,7 @@ async def process_ai_question(update: Update, context: ContextTypes.DEFAULT_TYPE
         formatted_response = (
             f"<b>Відповідь AI про професію друга:</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"<b>Ваше запитання:</b> <i>{question}</i>\n\n"
-            f"<b>Відповідь:</b>\n{ai_answer}"
+            f"<b>{ai_answer}</b>\n"
         )
         
         await update.message.reply_text(
