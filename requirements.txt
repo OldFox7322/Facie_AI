@@ -10,4 +10,4 @@ python-dotenv
 openai
 pytest
 httpx
-awsebcli
+python-telegram-bot
