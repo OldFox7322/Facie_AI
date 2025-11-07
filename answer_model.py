@@ -8,7 +8,9 @@ from typing import Dict, List
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
+'''
+LLM from OpenAI analyzes data obtained from the database and writes answers to questions asked by people about professions. 
+'''
 
 class AIManager:
     def __init__(self, question: str, profession_data: Dict):
