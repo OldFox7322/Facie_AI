@@ -21,7 +21,7 @@ class AIManager:
     async def answers_to_questions(self):
         prompt = f'''
              Profession: {self.profession}, description: {self.profession_description}. Answer this question: {self.question}.
-            If the question was unclear, please indicate this and provide an example of a correct question. Otherwise, simply respond.
+            If you understand at least 20 percent of the question, try to answer it. If you do not understand the question at all, indicate this and give an example of a correct question. Otherwise, just answer the question.
             Write your answer in the same language as the question, without emphasizing this.
             '''
 
