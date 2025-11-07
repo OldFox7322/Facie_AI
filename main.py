@@ -1,105 +1,117 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Dict, List
-from celery_tasks import save_unique_data_to_csv
-import uuid
-import os
-import joblib
+from typing import List
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, status, Response
+from models import FriendCreate, FriendResponse, Questions
+from database import create_new_friend, upload_file_to_s3, get_file_from_s3, get_one_friend, get_all_friends, delete_friend, delete_file_from_s3
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+from answer_model import AIManager
 import logging
+MAX_FILE_SIZE = 8 * 1024 * 1024
+ALLOWED_MIME_TYPES = ["image/jpeg", "image/png"]
+app = FastAPI(title = 'Friends DynamoDB & S3 API')
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+@app.post('/friends', response_model = FriendResponse)
+async def create_friend(
+	name: str = Form(...),
+	profession: str = Form(...),
+	profession_description: str = Form(...),
+	photo: UploadFile = File(...)
+	):
+	try:
+		metadata = FriendCreate(name = name, profession = profession, profession_description = profession_description)
+		friend_data_dict = metadata.model_dump(by_alias = True)
+		filename = photo.filename if  photo.filename else ''
+
+		result = create_new_friend(data = friend_data_dict, filename = filename)
+		if not result:
+			raise HTTPException(status_code = 500, detail = 'DynamoDB error when creating record')
+		#
+		file_content = await photo.read()
+		if len(file_content) > MAX_FILE_SIZE:
+			raise HTTPException(status_code = 400, detail = "File size limit (8MB) exceeded")
+		s3_key = result['S3Key']
+		upload_result_url = upload_file_to_s3(
+			file_content = file_content,
+			s3_key = s3_key,
+			content_type = photo.content_type
+			)
+		if not upload_result_url:
+			raise HTTPException(status_code = 500, detail = 'S3 upload failed')		
+		return result
+
+	except Exception as e:
+		raise HTTPException(status_code = 500, detail = f'DB error: {e}')
 
 
 
 
-class PredictResponse(BaseModel):
-	task_description: str
-	predicted_priority: str
 
 
-class PredictRequest(BaseModel):
-	task_description: str
-
-class CreateTask(BaseModel):
-	task_name: str
-	task_description: str
-
-
-class Task(BaseModel):
-	id: int
-	task_name: str
-	task_description: str
+@app.get('/friends', response_model = List[FriendResponse])
+def get_friends():
+	try:
+		result = get_all_friends()
+		if not result:
+			raise HTTPException(status_code = 404,detail = 'No friends added found' )
+		return result
+	except Exception as e:
+		raise HTTPException(status_code = 500, detail = f'DB error: {e}')
 
 
 
-logger = logging.getLogger(__name__)
-app = FastAPI()
-tasks: Dict[int, Task] = {}
-task_id_counter = 0
-ml_model = None
+
+@app.get('/friends/{friend_id}', response_model = FriendResponse)  
+def get_friend(friend_id: str):
+	try:
+		result = get_one_friend(friend_id)
+		if not result:
+			raise HTTPException(status_code = 404,detail = f'No found friend: {friend_id}')
+		return result
+	except Exception as e:
+		raise HTTPException(status_code = 500, detail = f'DB error: {e}')
 
 
 
-@app.get('/tasks', response_model = List[Task])
-def get_tasks():
-	return list(tasks.values())
+@app.get('/media/{s3_key:path}')
+def get_photo_file(s3_key: str):
+	try:
+		file_content = get_file_from_s3(s3_key)
+		if not file_content:
+			raise HTTPException(status_code = 404, detail = f'No found file at S3 key: {s3_key}')
+		content_type = "application/octet-stream"
+		if s3_key.lower().endswith(('.jpg', '.jpeg')):
+			content_type = "image/jpeg"
+		if s3_key.lower().endswith('.png'):
+			content_type = 'image/png'
+		return StreamingResponse(BytesIO(file_content), media_type=content_type)
+	except Exception as e:
+		raise HTTPException(status_code = 500, detail = f'DB error: {e}')
 
 
-
-@app.post('/tasks', response_model=Task)
-def create_task(new_task: CreateTask):
-	global task_id_counter 
-	task_id_counter += 1
-
-	result = Task(id = task_id_counter, **new_task.model_dump())
-	tasks[task_id_counter] = result
-	return result
-
-
-@app.put('/tasks/{task_id}', response_model = Task)
-def update_task(task_id: int, update_data: CreateTask):
-	if task_id not in tasks:
-		raise HTTPException(status_code=404, detail='Task not found')
-	task = tasks[task_id]
-	if (task.task_name == update_data.task_name and task.task_description == update_data.task_description):
-		raise HTTPException(status_code=400, detail='For data to change, there must be changes.')
-	result = Task(id = task_id, **update_data.model_dump())
-	tasks[task_id] = result
-	return result
+@app.post('/friends/{friend_id}/ask', response_model = str)
+async def answer_to_question(friend_id: str, question: Questions):
+	try:
+		result = get_one_friend(friend_id)
+		if not result:
+			raise HTTPException(status_code = 404,detail = f'No found friend: {friend_id}')
+		ai_menager = AIManager(question.question, result)
+		answer = await ai_menager.answers_to_questions()
+		return answer
+	except Exception as e:
+		raise HTTPException(status_code = 500, detail = f'DB error: {e}')
 
 
-
-@app.delete('/tasks/{task_id}')
-def delete_task(task_id: int):
-	if task_id not in tasks:
-		raise HTTPException(status_code=404, detail='Task not found')
-	del tasks[task_id]
-	return {'message': f"Task where id = {task_id} has been deleted"}
-
-
-
-@app.post('/sync-users')
-def sync_users_data():
-	save_unique_data_to_csv.delay()
-	return {'message': 'The task of synchronizing user data is running in the background.'}
-
-@app.on_event('startup')
-def load_model():
-	global ml_model
-	model_path = 'model.joblib'
-	if os.path.exists(model_path):
-		ml_model = joblib.load(model_path)
-		logging.info('ML model loaded successfully')
-	else:
-		raise RuntimeError('ML model file not found!')
-
-
-@app.post('/predict', response_model = PredictResponse)
-def predict_priority(request: PredictRequest):
-	if ml_model is None:
-		raise HTTPException(status_code=503, detail='ML model is not loaded yet')
-
-	prediction = ml_model.predict([request.task_description])
-	predicted_priority = prediction[0]
-
-	return{'task_description': request.task_description, 'predicted_priority': predicted_priority}
-
-
+@app.delete('/friends/delete/{friend_id}', response_model = str)
+def delete_one_friend(friend_id: str):
+	try:
+		result = get_one_friend(friend_id)
+		if result:
+			x = delete_friend(friend_id)
+			s3_key = result.get('S3Key')
+			y = delete_file_from_s3(s3_key)
+			return f'Friend: {friend_id} has been deleted'
+	except Exception as e:
+		raise HTTPException(status_code = 500, detail = f'DB error: {e}')

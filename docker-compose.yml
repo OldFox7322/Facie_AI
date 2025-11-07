@@ -1,91 +1,37 @@
 version: '3.8'
 
 services:
-  #Redis
-  redis:
-    image: redis:6.2.6-alpine
-    container_name: redis
-    ports:
-      - "6379:6379"
-    networks:
-      - my_network
-
-  #FastAPI
-  api:
+  fastapi_backend:
     build: .
-    container_name: fastapi_api
+    container_name: fastapi_backend_container
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - .:/app
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app 
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      - redis
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
-    networks:
-      - my_network
+    env_file:
+      - .env
 
-  #Celery Worker
-  worker:
+  telegram_bot:
     build: .
-    container_name: celery_worker
-    command: celery -A celery_tasks worker --loglevel=info
-    volumes:
-      - .:/app 
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      - redis
-      - api
-    networks:
-      - my_network
-
-  #Celery Beat
-  beat:
-    build: .
-    container_name: celery_beat
-    command: celery -A celery_tasks beat --loglevel=info
-    volumes:
-      - .:/app 
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      - redis
-      - api
-    networks:
-      - my_network
-
-
-
-  #Trainer
-  trainer:
-    build: .
+    container_name: telegram_bot_container
+    command: python bot_main.py
     volumes:
       - .:/app
-    networks:
-      - my_network
-    command: python ml_trainer.py
+    depends_on:
+      - fastapi_backend
+    env_file:
+      - .env
 
-
-
-  #Tests
   tests:
     build: .
+    container_name: tests_container
     volumes:
       - .:/app
     depends_on:
-      - redis
-      - api
-    networks:
-      - my_network
+      fastapi_backend:
+        condition: service_started
+    env_file:
+      - .env
     command: >
-      /bin/sh -c "sleep 5 && pytest test_main.py"
-
-
-networks:
-  my_network:
-    driver: bridge
+      /bin/sh -c "sleep 5 && pytest test_api.py"
